@@ -9,5 +9,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "OnRamp", path: "Sources/OnRamp"),
+        .testTarget(name: "OnRampTests", dependencies: ["OnRamp"], path: "Tests/OnRampTests"),
     ]
 )

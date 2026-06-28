@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(UIKit)
 import UIKit
+#endif
 
 public final class OnRamp {
     private init() {}
@@ -14,6 +16,9 @@ public final class OnRamp {
     private static var sessionId = UUID().uuidString
     private static var lastActive: Int64 = 0
     private static var stepIndex = 0
+
+    // Overridden in tests to intercept HTTP calls without touching URLSession.shared.
+    static var _urlSession: URLSession = .shared
 
     public static func initialize(apiKey: String, host: String, appVersion: String? = nil) {
         self.apiKey = apiKey
@@ -54,9 +59,9 @@ public final class OnRamp {
             "step_index": idx,
             "client_timestamp_ms": nowMs(),
             "platform": "ios",
-            "os_version": UIDevice.current.systemVersion,
-            "device_model": UIDevice.current.model,
-            "device_type": UIDevice.current.userInterfaceIdiom == .pad ? "tablet" : "phone",
+            "os_version": osVersion,
+            "device_model": deviceModel,
+            "device_type": deviceType,
         ]
         if let v = appVersion { event["app_version"] = v }
         if let p = properties { event["properties"] = p }
@@ -95,6 +100,16 @@ public final class OnRamp {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-onramp-key")
         req.httpBody = body
-        URLSession.shared.dataTask(with: req).resume()
+        _urlSession.dataTask(with: req).resume()
     }
+
+    #if canImport(UIKit)
+    private static var osVersion: String { UIDevice.current.systemVersion }
+    private static var deviceModel: String { UIDevice.current.model }
+    private static var deviceType: String { UIDevice.current.userInterfaceIdiom == .pad ? "tablet" : "phone" }
+    #else
+    private static var osVersion: String { ProcessInfo.processInfo.operatingSystemVersionString }
+    private static var deviceModel: String { "mac" }
+    private static var deviceType: String { "desktop" }
+    #endif
 }
