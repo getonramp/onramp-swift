@@ -1,3 +1,0 @@
-module OnRamp {
-    header "/Users/sandhyasandy/Dev/onway/packages/sdk-ios/.build/arm64-apple-macosx/debug/OnRamp.build/include/OnRamp-Swift.h"
-}

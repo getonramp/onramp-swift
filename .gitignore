@@ -1,0 +1,4 @@
+.build/
+*.xcworkspace
+*.xcodeproj
+.swiftpm/
