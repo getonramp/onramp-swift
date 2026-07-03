@@ -28,7 +28,7 @@ func application(_ application: UIApplication,
                  didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
     OnRamp.initialize(
         apiKey: "onr_YOUR_API_KEY",
-        host: "https://ingest.onramp.dev",
+        host: "https://ingest.getonramp.dev",
         appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     )
     return true
@@ -39,7 +39,7 @@ func application(_ application: UIApplication,
     init() {
         OnRamp.initialize(
             apiKey: "onr_YOUR_API_KEY",
-            host: "https://ingest.onramp.dev",
+            host: "https://ingest.getonramp.dev",
             appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
         )
     }
