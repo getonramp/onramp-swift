@@ -28,7 +28,6 @@ func application(_ application: UIApplication,
                  didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
     OnRamp.initialize(
         apiKey: "onr_YOUR_API_KEY",
-        host: "https://ingest.getonramp.dev",
         appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     )
     return true
@@ -39,7 +38,6 @@ func application(_ application: UIApplication,
     init() {
         OnRamp.initialize(
             apiKey: "onr_YOUR_API_KEY",
-            host: "https://ingest.getonramp.dev",
             appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
         )
     }
@@ -66,7 +64,7 @@ OnRamp.newSession()
 
 | Method | Description |
 |---|---|
-| `OnRamp.initialize(apiKey:host:appVersion:)` | Initialize once at app start. Restores the previous session if the user returned within 30 min. |
+| `OnRamp.initialize(apiKey:host:appVersion:)` | Initialize once at app start. `host` defaults to `https://ingest.getonramp.dev`. |
 | `OnRamp.step(_ name:properties:)` | Track a conversion milestone. Properties become breakdown dimensions in the dashboard. |
 | `OnRamp.identify(_ traits:)` | Associate the current user with known traits (userId, email, plan, etc.). Call once after sign-in. |
 | `OnRamp.newSession()` | Force a new session. Call after sign-out so the next user starts fresh. |

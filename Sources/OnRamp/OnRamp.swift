@@ -20,7 +20,11 @@ public final class OnRamp {
     // Overridden in tests to intercept HTTP calls without touching URLSession.shared.
     static var _urlSession: URLSession = .shared
 
-    public static func initialize(apiKey: String, host: String, appVersion: String? = nil) {
+    public static func initialize(
+        apiKey: String,
+        host: String = "https://ingest.getonramp.dev",
+        appVersion: String? = nil
+    ) {
         self.apiKey = apiKey
         self.host = host.hasSuffix("/") ? String(host.dropLast()) : host
         self.appVersion = appVersion

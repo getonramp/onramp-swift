@@ -175,6 +175,15 @@ final class OnRampTests: XCTestCase {
 
     // MARK: - initialize()
 
+    func testUsesProductionIngestionHostByDefault() {
+        OnRamp.initialize(apiKey: Self.key)
+        send { OnRamp.step("test") }
+        XCTAssertEqual(
+            MockURLProtocol.captured.first?.urlRequest.url?.absoluteString,
+            "https://ingest.getonramp.dev/v1/events"
+        )
+    }
+
     func testTrailingSlashIsStrippedFromHost() {
         UserDefaults.standard.removeObject(forKey: "onramp_anonymous_id")
         OnRamp.initialize(apiKey: Self.key, host: "\(Self.host)/")
