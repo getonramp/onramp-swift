@@ -49,6 +49,8 @@ final class OnRampTests: XCTestCase {
         config.protocolClasses = [MockURLProtocol.self]
         OnRamp._urlSession = URLSession(configuration: config)
         UserDefaults.standard.removeObject(forKey: "onramp_anonymous_id")
+        UserDefaults.standard.removeObject(forKey: "onramp_pending_attribution")
+        UserDefaults.standard.removeObject(forKey: "onramp_search_ads_token_sent")
         OnRamp.newSession() // zeroes lastActive so initialize()'s refreshSession() resets stepIndex
         OnRamp.initialize(apiKey: Self.key, host: Self.host)
     }
@@ -215,5 +217,83 @@ final class OnRampTests: XCTestCase {
         let id2 = try XCTUnwrap(event(from: MockURLProtocol.captured.first!)["anonymous_id"] as? String)
 
         XCTAssertNotEqual(id1, id2)
+    }
+
+    // MARK: - Attribution
+
+    func testHandleDeepLinkAttachesUtmParamsToFirstEvent() throws {
+        UserDefaults.standard.removeObject(forKey: "onramp_pending_attribution")
+        OnRamp.initialize(apiKey: Self.key, host: Self.host, captureInstallReferrer: true)
+        OnRamp.handleDeepLink(URL(string: "onramptest://open?utm_source=newsletter&utm_medium=email")!)
+        send { OnRamp.step("onboarding_start") }
+        let ev = try event(from: MockURLProtocol.captured.first!)
+        let props = try XCTUnwrap(ev["properties"] as? [String: Any])
+        XCTAssertEqual(props["_utm_source"] as? String, "newsletter")
+        XCTAssertEqual(props["_utm_medium"] as? String, "email")
+        XCTAssertEqual(props["_attribution_channel"] as? String, "deep_link")
+    }
+
+    func testHandleDeepLinkFallsBackToClickIdMapping() throws {
+        UserDefaults.standard.removeObject(forKey: "onramp_pending_attribution")
+        OnRamp.initialize(apiKey: Self.key, host: Self.host, captureInstallReferrer: true)
+        OnRamp.handleDeepLink(URL(string: "onramptest://open?gclid=abc123")!)
+        send { OnRamp.step("onboarding_start") }
+        let ev = try event(from: MockURLProtocol.captured.first!)
+        let props = try XCTUnwrap(ev["properties"] as? [String: Any])
+        XCTAssertEqual(props["_utm_source"] as? String, "google")
+        XCTAssertEqual(props["_utm_medium"] as? String, "cpc")
+    }
+
+    func testAttributionAttachesOnlyToFirstEvent() throws {
+        UserDefaults.standard.removeObject(forKey: "onramp_pending_attribution")
+        OnRamp.initialize(apiKey: Self.key, host: Self.host, captureInstallReferrer: true)
+        OnRamp.handleDeepLink(URL(string: "onramptest://open?utm_source=newsletter")!)
+        sendN(2) { OnRamp.step("first"); OnRamp.step("second") }
+        let first = try event(from: MockURLProtocol.captured[0])
+        let second = try event(from: MockURLProtocol.captured[1])
+        let firstProps = try XCTUnwrap(first["properties"] as? [String: Any])
+        XCTAssertEqual(firstProps["_utm_source"] as? String, "newsletter")
+        XCTAssertNil((second["properties"] as? [String: Any])?["_utm_source"])
+    }
+
+    func testCaptureInstallReferrerDefaultsToFalse() throws {
+        UserDefaults.standard.removeObject(forKey: "onramp_pending_attribution")
+        OnRamp.initialize(apiKey: Self.key, host: Self.host) // captureInstallReferrer omitted - defaults to false
+        OnRamp.handleDeepLink(URL(string: "onramptest://open?utm_source=newsletter")!)
+        send { OnRamp.step("onboarding_start") }
+        let ev = try event(from: MockURLProtocol.captured.first!)
+        XCTAssertNil((ev["properties"] as? [String: Any])?["_utm_source"])
+    }
+
+    func testSetAttributionAttachesMmpProvidedAttribution() throws {
+        UserDefaults.standard.removeObject(forKey: "onramp_pending_attribution")
+        OnRamp.setAttribution(source: "facebook", medium: "paid_social", campaign: "summer_promo")
+        send { OnRamp.step("onboarding_start") }
+        let ev = try event(from: MockURLProtocol.captured.first!)
+        let props = try XCTUnwrap(ev["properties"] as? [String: Any])
+        XCTAssertEqual(props["_utm_source"] as? String, "facebook")
+        XCTAssertEqual(props["_utm_medium"] as? String, "paid_social")
+        XCTAssertEqual(props["_utm_campaign"] as? String, "summer_promo")
+        XCTAssertEqual(props["_attribution_channel"] as? String, "mmp")
+    }
+
+    func testSetAttributionIsNoOpAfterAttributionAlreadyConsumed() throws {
+        UserDefaults.standard.removeObject(forKey: "onramp_pending_attribution")
+        sendN(2) {
+            OnRamp.step("first") // consumes attribution (organic - no properties attached)
+            OnRamp.setAttribution(source: "facebook") // too late
+            OnRamp.step("second")
+        }
+        let second = try event(from: MockURLProtocol.captured[1])
+        XCTAssertNil((second["properties"] as? [String: Any])?["_utm_source"])
+    }
+
+    func testCaptureInstallReferrerExplicitlyFalseSkipsDeepLinkCapture() throws {
+        UserDefaults.standard.removeObject(forKey: "onramp_pending_attribution")
+        OnRamp.initialize(apiKey: Self.key, host: Self.host, captureInstallReferrer: false)
+        OnRamp.handleDeepLink(URL(string: "onramptest://open?utm_source=newsletter")!)
+        send { OnRamp.step("onboarding_start") }
+        let ev = try event(from: MockURLProtocol.captured.first!)
+        XCTAssertNil((ev["properties"] as? [String: Any])?["_utm_source"])
     }
 }

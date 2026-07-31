@@ -2,11 +2,16 @@ import Foundation
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(AdServices)
+import AdServices
+#endif
 
 public final class OnRamp {
     private init() {}
 
     private static let anonKey = "onramp_anonymous_id"
+    private static let attributionKey = "onramp_pending_attribution"
+    private static let searchAdsTokenSentKey = "onramp_search_ads_token_sent"
     private static let sessionTimeoutMs: Int64 = 30 * 60 * 1000
 
     // All mutable state below must only be touched while holding `stateQueue`
@@ -24,18 +29,58 @@ public final class OnRamp {
     private static var lastActive: Int64 = 0
     private static var stepIndex = 0
 
+    // Install-scoped, not session-scoped: a deep link, MMP-provided
+    // attribution, or Apple Search Ads result should attribute the install
+    // exactly once, on the first tracked event ever, not be re-derived on
+    // every app open.
+    private static var captureInstallReferrer = true
+    private static var pendingAttributionUtm: [String: String]? = nil
+    private static var pendingAttributionChannel: String? = nil
+    private static var attributionConsumed = false
+
+    private struct StoredAttribution: Codable {
+        var utm: [String: String]?
+        var channel: String?
+        var consumed: Bool
+    }
+
+    private static func loadAttributionLocked() -> StoredAttribution? {
+        guard let data = UserDefaults.standard.data(forKey: attributionKey) else { return nil }
+        return try? JSONDecoder().decode(StoredAttribution.self, from: data)
+    }
+
+    private static func saveAttributionLocked(_ attribution: StoredAttribution) {
+        guard let data = try? JSONEncoder().encode(attribution) else { return }
+        UserDefaults.standard.set(data, forKey: attributionKey)
+    }
+
     // Overridden in tests to intercept HTTP calls without touching URLSession.shared.
     static var _urlSession: URLSession = .shared
 
     public static func initialize(
         apiKey: String,
         host: String = "https://ingest.getonramp.dev",
-        appVersion: String? = nil
+        appVersion: String? = nil,
+        /// Capture install attribution (deep links via `handleDeepLink()`,
+        /// and Apple Search Ads via the AdServices framework) automatically.
+        /// Default **false** - opt-in, not opt-out, since turning this on
+        /// starts collecting a new category of data and can touch the same
+        /// OS-level APIs an existing MMP (Adjust, AppsFlyer, Branch) already
+        /// reads. Set to `true` to enable OnRamp's own capture; otherwise
+        /// call `OnRamp.setAttribution()` from your MMP's resolved-attribution
+        /// callback instead - matches the same flag on the other OnRamp SDKs.
+        captureInstallReferrer: Bool = false
     ) {
+        var shouldCaptureSearchAds = false
+        var anonIdForToken = ""
+        var hostForToken = ""
+        var keyForToken = ""
+
         stateQueue.sync {
             self.apiKey = apiKey
             self.host = host.hasSuffix("/") ? String(host.dropLast()) : host
             self.appVersion = appVersion
+            self.captureInstallReferrer = captureInstallReferrer
             let defaults = UserDefaults.standard
             if let stored = defaults.string(forKey: anonKey) {
                 anonymousId = stored
@@ -44,7 +89,98 @@ public final class OnRamp {
                 defaults.set(anonymousId, forKey: anonKey)
             }
             refreshSessionLocked()
+
+            let stored = loadAttributionLocked()
+            attributionConsumed = stored?.consumed ?? false
+            if captureInstallReferrer && !attributionConsumed {
+                pendingAttributionUtm = stored?.utm
+                pendingAttributionChannel = stored?.channel
+                if !defaults.bool(forKey: searchAdsTokenSentKey) {
+                    shouldCaptureSearchAds = true
+                    anonIdForToken = anonymousId
+                    hostForToken = self.host
+                    keyForToken = self.apiKey
+                }
+            }
         }
+
+        if shouldCaptureSearchAds {
+            // Local token generation only (no network) but dispatched off the
+            // calling thread anyway, since initialize() is typically called
+            // from app startup on the main thread.
+            DispatchQueue.global(qos: .utility).async {
+                captureSearchAdsAttributionIfAvailable(anonymousId: anonIdForToken, host: hostForToken, apiKey: keyForToken)
+            }
+        }
+    }
+
+    /// Forward the URL your app receives via a Universal Link, custom scheme
+    /// launch, or `continueUserActivity` - e.g. from
+    /// `application(_:continue:restorationHandler:)`, `.onOpenURL`, or
+    /// `.onContinueUserActivity` in SwiftUI. Captures `utm_*` params (falling
+    /// back to known ad click IDs) and attaches them to this install's first
+    /// tracked event, once.
+    public static func handleDeepLink(_ url: URL) {
+        stateQueue.sync {
+            guard captureInstallReferrer, !attributionConsumed else { return }
+            guard let utm = AttributionParser.utm(from: url) else { return }
+            pendingAttributionUtm = utm
+            pendingAttributionChannel = "deep_link"
+            saveAttributionLocked(StoredAttribution(utm: utm, channel: "deep_link", consumed: false))
+        }
+    }
+
+    /// Manually record install attribution resolved by your own MMP (Adjust,
+    /// AppsFlyer, Branch, etc). Call this from that SDK's attribution-resolved
+    /// callback if you've set `captureInstallReferrer: false` in
+    /// `OnRamp.initialize()` instead of relying on OnRamp's own capture.
+    /// No-ops if attribution has already been attached to this install's
+    /// first tracked event.
+    public static func setAttribution(
+        source: String,
+        medium: String? = nil,
+        campaign: String? = nil,
+        term: String? = nil,
+        content: String? = nil
+    ) {
+        stateQueue.sync {
+            guard !attributionConsumed else { return }
+            var utm: [String: String] = ["_utm_source": source]
+            if let medium = medium { utm["_utm_medium"] = medium }
+            if let campaign = campaign { utm["_utm_campaign"] = campaign }
+            if let term = term { utm["_utm_term"] = term }
+            if let content = content { utm["_utm_content"] = content }
+            pendingAttributionUtm = utm
+            pendingAttributionChannel = "mmp"
+            saveAttributionLocked(StoredAttribution(utm: utm, channel: "mmp", consumed: false))
+        }
+    }
+
+    /// Apple Search Ads attribution token capture (iOS 14.3+). The token
+    /// itself is opaque and can't be resolved into a campaign/keyword
+    /// on-device - it's exchanged server-side against Apple's endpoint, so
+    /// this only sends it once per install and moves on. Does not require
+    /// IDFA or an App Tracking Transparency prompt.
+    private static func captureSearchAdsAttributionIfAvailable(anonymousId: String, host: String, apiKey: String) {
+        guard !apiKey.isEmpty else { return }
+        #if canImport(AdServices)
+        guard #available(iOS 14.3, macOS 11.1, *) else { return }
+        guard let token = try? AAAttribution.attributionToken() else { return }
+        UserDefaults.standard.set(true, forKey: searchAdsTokenSentKey)
+
+        guard let url = URL(string: "\(host)/v1/attribution/apple-search-ads"),
+              let body = try? JSONSerialization.data(withJSONObject: [
+                "token": token,
+                "anonymous_id": anonymousId,
+              ])
+        else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(apiKey, forHTTPHeaderField: "x-onramp-key")
+        req.httpBody = body
+        _urlSession.dataTask(with: req).resume()
+        #endif
     }
 
     private static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
@@ -63,6 +199,21 @@ public final class OnRamp {
         let (event, apiKey, host): ([String: Any], String, String) = stateQueue.sync {
             refreshSessionLocked()
             let idx = stepIndex; stepIndex += 1
+
+            var mergedProperties: [String: Any] = properties ?? [:]
+            if !attributionConsumed {
+                if let utm = pendingAttributionUtm {
+                    for (key, value) in utm { mergedProperties[key] = value }
+                }
+                if let channel = pendingAttributionChannel {
+                    mergedProperties["_attribution_channel"] = channel
+                }
+                attributionConsumed = true
+                pendingAttributionUtm = nil
+                pendingAttributionChannel = nil
+                saveAttributionLocked(StoredAttribution(utm: nil, channel: nil, consumed: true))
+            }
+
             var event: [String: Any] = [
                 "schema_version": "1.0",
                 "event_id": UUID().uuidString,
@@ -79,7 +230,7 @@ public final class OnRamp {
                 "device_type": deviceType,
             ]
             if let v = appVersion { event["app_version"] = v }
-            if let p = properties { event["properties"] = p }
+            if !mergedProperties.isEmpty { event["properties"] = mergedProperties }
             return (event, self.apiKey, self.host)
         }
         send(event, apiKey: apiKey, host: host)
