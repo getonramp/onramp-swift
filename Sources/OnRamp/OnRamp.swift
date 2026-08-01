@@ -137,6 +137,7 @@ public final class OnRamp {
     /// No-ops if attribution has already been attached to this install's
     /// first tracked event.
     public static func setAttribution(
+        provider: String? = nil,
         source: String,
         medium: String? = nil,
         campaign: String? = nil,
@@ -146,6 +147,7 @@ public final class OnRamp {
         stateQueue.sync {
             guard !attributionConsumed else { return }
             var utm: [String: String] = ["_utm_source": source]
+            if let provider = provider { utm["_attribution_provider"] = provider }
             if let medium = medium { utm["_utm_medium"] = medium }
             if let campaign = campaign { utm["_utm_campaign"] = campaign }
             if let term = term { utm["_utm_term"] = term }
@@ -165,6 +167,15 @@ public final class OnRamp {
         guard !apiKey.isEmpty else { return }
         #if canImport(AdServices)
         guard #available(iOS 14.3, macOS 11.1, *) else { return }
+        // Developer mode can return a synthetic `attribution: true` response.
+        // TestFlight has a sandbox receipt as well, so only production App
+        // Store installs may submit an Apple Ads token.
+        #if targetEnvironment(simulator)
+        return
+        #else
+        guard let receiptURL = Bundle.main.appStoreReceiptURL,
+              receiptURL.lastPathComponent != "sandboxReceipt" else { return }
+        #endif
         guard let token = try? AAAttribution.attributionToken() else { return }
         UserDefaults.standard.set(true, forKey: searchAdsTokenSentKey)
 
