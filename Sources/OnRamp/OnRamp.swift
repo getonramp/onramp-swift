@@ -269,6 +269,14 @@ public final class OnRamp {
         send(event, apiKey: apiKey, host: host)
     }
 
+    /// The current anonymous and session IDs - e.g. to pass the anonymous ID
+    /// into a third-party SDK (like RevenueCat's `appUserID`) so purchase
+    /// events can be matched back to this OnRamp identity. Call after
+    /// `initialize()`.
+    public static func getIds() -> (anonymousId: String, sessionId: String) {
+        stateQueue.sync { (anonymousId, sessionId) }
+    }
+
     /// Call after sign-out so the next user gets a fresh session.
     public static func newSession() {
         stateQueue.sync {
